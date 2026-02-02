@@ -1,0 +1,259 @@
+{{- $talos := .Values.talosCluster -}}
+{{- $namespace := include "kubevirt-talos.namespace" . -}}
+{{- $clusterName := $talos.name -}}
+{{- $controlPlaneTemplate := printf "%s-control-plane-%s" $clusterName $talos.talosCode -}}
+{{- $machineDeploymentName := printf "%s-md-0" $clusterName -}}
+{{- $workerTemplate := printf "%s-md-0-%s" $clusterName $talos.talosCode -}}
+{{- $cilium := default (dict) $talos.cilium -}}
+{{- $ciliumEnabled := default false $cilium.enabled -}}
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: {{ $clusterName }}
+  namespace: {{ $namespace }}
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+        - {{ $talos.podCIDR | quote }}
+    services:
+      cidrBlocks:
+        - {{ $talos.serviceCIDR | quote }}
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+    kind: KubevirtCluster
+    name: {{ $clusterName }}
+    namespace: {{ $namespace }}
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1alpha3
+    kind: TalosControlPlane
+    name: {{ printf "%s-controlplane" $clusterName }}
+    namespace: {{ $namespace }}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtCluster
+metadata:
+  name: {{ $clusterName }}
+  namespace: {{ $namespace }}
+spec:
+  controlPlaneServiceTemplate:
+    spec:
+      type: {{ $talos.controlPlaneServiceType | default "ClusterIP" }}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: {{ $controlPlaneTemplate }}
+  namespace: {{ $namespace }}
+spec:
+  template:
+    spec:
+      virtualMachineBootstrapCheck:
+        checkStrategy: none
+      virtualMachineTemplate:
+        metadata:
+          namespace: {{ $namespace }}
+        spec:
+          instancetype:
+            kind: VirtualMachineClusterInstancetype
+            name: {{ $talos.instanceType }}
+          preference:
+            kind: VirtualMachineClusterPreference
+            name: {{ $talos.instancePreference }}
+          dataVolumeTemplates:
+          - metadata:
+              name: boot-volume
+            spec:
+              pvc:
+                volumeMode: Block
+                accessModes:
+                - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: {{ $talos.rootVolumeSize | quote }}
+                storageClassName: {{ $talos.storageClassName }}
+              source:
+                http:
+                  url: {{ $talos.talosImageURL }}
+          runStrategy: Always
+          template:
+            spec:
+              domain:
+                devices:
+                  networkInterfaceMultiqueue: true
+                  disks:
+                  - disk:
+                      bus: virtio
+                    name: dv-volume
+              evictionStrategy: External
+              volumes:
+              - dataVolume:
+                  name: boot-volume
+                name: dv-volume
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1alpha3
+kind: TalosControlPlane
+metadata:
+  name: {{ printf "%s-controlplane" $clusterName }}
+  namespace: {{ $namespace }}
+spec:
+  version: {{ $talos.kubernetesVersion | quote }}
+  replicas: {{ $talos.controlPlaneMachineCount }}
+  infrastructureTemplate:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+    kind: KubevirtMachineTemplate
+    name: {{ $controlPlaneTemplate }}
+    namespace: {{ $namespace }}
+  controlPlaneConfig:
+    controlplane:
+      generateType: controlplane
+      talosVersion: {{ $talos.talosVersion | quote }}
+      configPatches:
+        - op: add
+          path: /cluster/network/cni
+          value:
+            name: none
+{{- if $ciliumEnabled }}
+        - op: add
+          path: /cluster/inlineManifests
+          value:
+          - name: cilium-install
+            contents: |
+{{ include "kubevirt-talos.talosCiliumInlineManifest" (dict "cilium" $cilium) | indent 14 }}
+{{- end }}
+        - op: add
+          path: /cluster/proxy/disabled
+          value: true
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: {{ $workerTemplate }}
+  namespace: {{ $namespace }}
+spec:
+  template:
+    spec:
+      virtualMachineBootstrapCheck:
+        checkStrategy: none
+      virtualMachineTemplate:
+        metadata:
+          namespace: {{ $namespace }}
+          labels:
+            app: {{ $machineDeploymentName }}
+        spec:
+          instancetype:
+            kind: VirtualMachineClusterInstancetype
+            name: {{ $talos.instanceType }}
+          preference:
+            kind: VirtualMachineClusterPreference
+            name: {{ $talos.instancePreference }}
+          dataVolumeTemplates:
+          - metadata:
+              name: boot-volume
+            spec:
+              pvc:
+                volumeMode: Block
+                accessModes:
+                - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: {{ $talos.rootVolumeSize | quote }}
+                storageClassName: {{ $talos.storageClassName }}
+              source:
+                http:
+                  url: {{ $talos.talosImageURL }}
+          runStrategy: Always
+          template:
+            metadata:
+              labels:
+                app: {{ $machineDeploymentName }}
+            spec:
+              affinity:
+                podAntiAffinity:
+                  preferredDuringSchedulingIgnoredDuringExecution:
+                  - weight: 100
+                    podAffinityTerm:
+                      labelSelector:
+                        matchExpressions:
+                        - key: app
+                          operator: In
+                          values:
+                          - {{ $machineDeploymentName }}
+                      topologyKey: kubernetes.io/hostname
+              domain:
+                devices:
+                  networkInterfaceMultiqueue: true
+                  disks:
+                  - disk:
+                      bus: virtio
+                    name: dv-volume
+              evictionStrategy: External
+              volumes:
+              - dataVolume:
+                  name: boot-volume
+                name: dv-volume
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
+kind: TalosConfigTemplate
+metadata:
+  name: {{ printf "%s-%s" $machineDeploymentName $talos.talosCode }}
+  namespace: {{ $namespace }}
+spec:
+  template:
+    spec:
+      generateType: join
+      talosVersion: {{ $talos.talosVersion | quote }}
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  labels:
+    cluster.x-k8s.io/cluster-name: {{ $clusterName }}
+  name: {{ $machineDeploymentName }}
+  namespace: {{ $namespace }}
+spec:
+  clusterName: {{ $clusterName }}
+  replicas: {{ $talos.workerMachineCount }}
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/deployment-name: {{ $machineDeploymentName }}
+  template:
+    metadata:
+      labels:
+        cluster.x-k8s.io/cluster-name: {{ $clusterName }}
+        cluster.x-k8s.io/deployment-name: {{ $machineDeploymentName }}
+        node-role.kubernetes.io/worker: ""
+    spec:
+      clusterName: {{ $clusterName }}
+      version: {{ $talos.kubernetesVersion | quote }}
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
+          kind: TalosConfigTemplate
+          name: {{ printf "%s-%s" $machineDeploymentName $talos.talosCode }}
+          namespace: {{ $namespace }}
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+        kind: KubevirtMachineTemplate
+        name: {{ $workerTemplate }}
+        namespace: {{ $namespace }}
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineHealthCheck
+metadata:
+  name: {{ $machineDeploymentName }}
+  namespace: {{ $namespace }}
+spec:
+  clusterName: {{ $clusterName }}
+  maxUnhealthy: 100%
+  nodeStartupTimeout: 10m
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/deployment-name: {{ $machineDeploymentName }}
+  unhealthyConditions:
+  - type: Ready
+    status: Unknown
+    timeout: 300s
+  - type: Ready
+    status: "False"
+    timeout: 300s

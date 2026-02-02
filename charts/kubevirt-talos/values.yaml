@@ -1,0 +1,26 @@
+global:
+  namespace: default
+
+talosCluster:
+  name: capi-talos
+  kubernetesVersion: v1.32.1
+  controlPlaneMachineCount: 1
+  workerMachineCount: 1
+  podCIDR: 10.243.0.0/16
+  serviceCIDR: 10.95.0.0/16
+  instanceType: o1.xlarge
+  instancePreference: talos
+  rootVolumeSize: 10Gi
+  storageClassName: longhorn
+  talosImageURL: https://factory.talos.dev/image/example/v1.9.5/openstack-amd64.raw.xz
+  talosVersion: v1.9.5
+  talosCode: t18
+  controlPlaneServiceType: ClusterIP
+  cilium:
+    enabled: true
+    image: quay.io/cilium/cilium-cli-ci:latest
+    kubeProxyReplacement: true
+    hostLegacyRouting: false
+    routingMode: tunnel
+    tunnelProtocol: geneve
+    hubbleEnabled: true

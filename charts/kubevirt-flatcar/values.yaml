@@ -1,0 +1,19 @@
+global:
+  namespace: default
+
+flatcarCluster:
+  name: capi-flatcar
+  kubernetesVersion: v1.30.5
+  controlPlaneMachineCount: 3
+  workerMachineCount: 3
+  podCIDR: 10.243.0.0/16
+  serviceCIDR: 10.95.0.0/16
+  dnsDomain: ""
+  instanceType: u1.large
+  instancePreference: ubuntu
+  rootVolumeSize: 40Gi
+  storageClassName: longhorn
+  flatcarImageURL: https://example.com/flatcar.raw.xz
+  controlPlaneServiceType: ClusterIP
+  sshAuthorizedKey: "ssh-ed25519 AAAAC..."
+  workerAntiAffinity: true

@@ -1,0 +1,7 @@
+apiVersion: v2
+name: kubevirt-talos
+description: Helm chart for Talos-based Cluster API templates on KubeVirt
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/jseguillon/kubevirt-capi-easy
